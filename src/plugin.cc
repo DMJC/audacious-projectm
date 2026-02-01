@@ -144,8 +144,8 @@ bool pm_create_locked(int w, int h) {
 void on_gl_realize(GtkGLArea* area, gpointer) {
     g_message("projectM: GL realize");
     gtk_gl_area_make_current(area);
-    if (gtk_gl_area_get_error(area)) {
-        g_warning("projectM: GtkGLArea realize error");
+    if (auto* err = gtk_gl_area_get_error(area)) {
+        g_warning("projectM: GtkGLArea realize error: %s", err->message);
         return;
     }
     if (!dummy_vao) {
@@ -203,8 +203,10 @@ if (!logged) {
 }
 
     gtk_gl_area_make_current(area);
-    if (gtk_gl_area_get_error(area))
+    if (auto* err = gtk_gl_area_get_error(area)) {
+        g_warning("projectM: GtkGLArea render error: %s", err->message);
         return TRUE;
+    }
 
     std::lock_guard<std::mutex> lock(pm_mutex);
     if (!pm)
@@ -266,7 +268,6 @@ GtkWidget* create_gl_area() {
 
     gtk_gl_area_set_auto_render(GTK_GL_AREA(area), FALSE);
     gtk_gl_area_set_has_depth_buffer(GTK_GL_AREA(area), TRUE);
-    gtk_gl_area_set_required_version(GTK_GL_AREA(area), 3, 3);
     gtk_gl_area_set_use_es(GTK_GL_AREA(area), FALSE);
 
     g_signal_connect(area, "realize",   G_CALLBACK(on_gl_realize),   nullptr);
