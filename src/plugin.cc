@@ -1,4 +1,5 @@
 #include <gtk/gtk.h>
+#include <gmodule.h>
 #include <epoxy/gl.h>
 
 #include <libaudcore/plugin.h>
@@ -44,6 +45,28 @@ std::vector<float> drain_buf;
 gint current_scale_factor(GtkWidget* w) {
     if (!w) return 1;
     return std::max(gtk_widget_get_scale_factor(w), 1);
+}
+
+GLuint get_gl_area_framebuffer(GtkGLArea* area) {
+    using GetFramebufferFunc = guint (*)(GtkGLArea*);
+    static GetFramebufferFunc get_framebuffer = nullptr;
+    static bool attempted = false;
+
+    if (!attempted) {
+        attempted = true;
+        if (GModule* module = g_module_open(nullptr, GModuleFlags(0))) {
+            gpointer symbol = nullptr;
+            if (g_module_symbol(module, "gtk_gl_area_get_framebuffer", &symbol)) {
+                get_framebuffer = reinterpret_cast<GetFramebufferFunc>(symbol);
+            }
+            g_module_close(module);
+        }
+    }
+
+    if (get_framebuffer) {
+        return static_cast<GLuint>(get_framebuffer(area));
+    }
+    return 0;
 }
 
 void pm_destroy_locked() {
@@ -209,7 +232,7 @@ if (!logged) {
     }
 
     gtk_gl_area_attach_buffers(area);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, get_gl_area_framebuffer(area));
 
     std::lock_guard<std::mutex> lock(pm_mutex);
     if (!pm)
