@@ -236,12 +236,38 @@ if (!logged) {
         return TRUE;
     }
 
-    gtk_gl_area_attach_buffers(area);
-    glBindFramebuffer(GL_FRAMEBUFFER, get_gl_area_framebuffer(area));
+    GLint prev_framebuffer = 0;
+    GLint prev_vao = 0;
+    GLint prev_program = 0;
+    GLint prev_viewport[4] = {0};
+    GLfloat prev_clear_color[4] = {0.f};
+    GLboolean prev_blend = GL_FALSE;
+    GLboolean prev_depth = GL_FALSE;
+    GLboolean prev_stencil = GL_FALSE;
+    GLboolean prev_scissor = GL_FALSE;
+    GLboolean prev_cull = GL_FALSE;
+    GLint prev_blend_src = GL_ONE;
+    GLint prev_blend_dst = GL_ZERO;
+
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_framebuffer);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prev_vao);
+    glGetIntegerv(GL_CURRENT_PROGRAM, &prev_program);
+    glGetIntegerv(GL_VIEWPORT, prev_viewport);
+    glGetFloatv(GL_COLOR_CLEAR_VALUE, prev_clear_color);
+    glGetIntegerv(GL_BLEND_SRC_ALPHA, &prev_blend_src);
+    glGetIntegerv(GL_BLEND_DST_ALPHA, &prev_blend_dst);
+    prev_blend = glIsEnabled(GL_BLEND);
+    prev_depth = glIsEnabled(GL_DEPTH_TEST);
+    prev_stencil = glIsEnabled(GL_STENCIL_TEST);
+    prev_scissor = glIsEnabled(GL_SCISSOR_TEST);
+    prev_cull = glIsEnabled(GL_CULL_FACE);
 
     std::lock_guard<std::mutex> lock(pm_mutex);
     if (!pm)
         return TRUE;
+
+    gtk_gl_area_attach_buffers(area);
+    glBindFramebuffer(GL_FRAMEBUFFER, get_gl_area_framebuffer(area));
 
     int scale = current_scale_factor(GTK_WIDGET(area));
     int w = gtk_widget_get_allocated_width(GTK_WIDGET(area)) * scale;
@@ -278,6 +304,34 @@ if (!logged) {
             g_warning("projectM: GL error after render: 0x%x", (unsigned)e);
         }
     }
+
+    if (prev_blend)
+        glEnable(GL_BLEND);
+    else
+        glDisable(GL_BLEND);
+    if (prev_depth)
+        glEnable(GL_DEPTH_TEST);
+    else
+        glDisable(GL_DEPTH_TEST);
+    if (prev_stencil)
+        glEnable(GL_STENCIL_TEST);
+    else
+        glDisable(GL_STENCIL_TEST);
+    if (prev_scissor)
+        glEnable(GL_SCISSOR_TEST);
+    else
+        glDisable(GL_SCISSOR_TEST);
+    if (prev_cull)
+        glEnable(GL_CULL_FACE);
+    else
+        glDisable(GL_CULL_FACE);
+
+    glBlendFunc(prev_blend_src, prev_blend_dst);
+    glUseProgram(prev_program);
+    glBindVertexArray(prev_vao);
+    glBindFramebuffer(GL_FRAMEBUFFER, prev_framebuffer);
+    glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
+    glClearColor(prev_clear_color[0], prev_clear_color[1], prev_clear_color[2], prev_clear_color[3]);
 
 return TRUE;
 }
