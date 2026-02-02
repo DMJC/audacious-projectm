@@ -208,6 +208,8 @@ if (!logged) {
         return TRUE;
     }
 
+    glBindFramebuffer(GL_FRAMEBUFFER, gtk_gl_area_get_framebuffer(area));
+
     std::lock_guard<std::mutex> lock(pm_mutex);
     if (!pm)
         return TRUE;
