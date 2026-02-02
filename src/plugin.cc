@@ -208,11 +208,8 @@ if (!logged) {
         return TRUE;
     }
 
-#if GTK_CHECK_VERSION(3, 24, 0)
-    glBindFramebuffer(GL_FRAMEBUFFER, gtk_gl_area_get_framebuffer(area));
-#else
+    gtk_gl_area_attach_buffers(area);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-#endif
 
     std::lock_guard<std::mutex> lock(pm_mutex);
     if (!pm)
