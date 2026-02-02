@@ -54,12 +54,17 @@ GLuint get_gl_area_framebuffer(GtkGLArea* area) {
 
     if (!attempted) {
         attempted = true;
-        if (GModule* module = g_module_open(nullptr, GModuleFlags(0))) {
-            gpointer symbol = nullptr;
-            if (g_module_symbol(module, "gtk_gl_area_get_framebuffer", &symbol)) {
-                get_framebuffer = reinterpret_cast<GetFramebufferFunc>(symbol);
+        const char* candidates[] = {nullptr, "libgtk-3.so.0"};
+        for (const char* candidate : candidates) {
+            if (GModule* module = g_module_open(candidate, GModuleFlags(0))) {
+                gpointer symbol = nullptr;
+                if (g_module_symbol(module, "gtk_gl_area_get_framebuffer", &symbol)) {
+                    get_framebuffer = reinterpret_cast<GetFramebufferFunc>(symbol);
+                    g_module_close(module);
+                    break;
+                }
+                g_module_close(module);
             }
-            g_module_close(module);
         }
     }
 
