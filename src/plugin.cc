@@ -74,20 +74,27 @@ static void init_playlist_locked()
 {
     const char* preset_dir = nullptr;
 
+    // projectM package layouts differ by distro/version; probe the common ones.
+    const char* env_preset_dir = g_getenv("PROJECTM_PRESET_DIR");
     const char* candidates[] = {
+        env_preset_dir,
         "/usr/share/projectM/presets",
         "/usr/local/share/projectM/presets",
+        "/usr/share/projectM4/presets",
+        "/usr/local/share/projectM4/presets",
+        "/usr/share/projectm/presets",
+        "/usr/local/share/projectm/presets",
     };
 
     for (auto* d : candidates) {
-        if (d && g_file_test(d, G_FILE_TEST_IS_DIR)) {
+        if (d && d[0] != '\0' && g_file_test(d, G_FILE_TEST_IS_DIR)) {
             preset_dir = d;
             break;
         }
     }
 
     if (!preset_dir) {
-        g_warning("projectM: no preset directory found; create /usr/share/projectM/presets");
+        g_warning("projectM: no preset directory found; set PROJECTM_PRESET_DIR or install presets under /usr/share/projectM(4)/presets");
         return;
     }
 
