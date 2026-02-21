@@ -231,18 +231,12 @@ if (!logged) {
 
     drain_audio_into_projectm_locked();
 
-    // Core-profile safe baseline state
-    glBindVertexArray(dummy_vao);
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_STENCIL_TEST);
-    glDisable(GL_SCISSOR_TEST);
-    glDisable(GL_CULL_FACE);
-    glDisable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    // Avoid forcing GL pipeline state here: projectM manages its own render state,
+    // and clobbering global state (notably blend/cull/depth settings) can result
+    // in a fully black frame on some drivers/builds.
     glViewport(0, 0, fb_w, fb_h);
     glClearColor(0.f, 0.f, 0.f, 1.f);
     glClear(GL_COLOR_BUFFER_BIT);
-    glBindVertexArray(dummy_vao);
     projectm_opengl_render_frame(pm);
 
     // Log GL errors once in a while
