@@ -148,6 +148,29 @@ bool pm_create_locked(int w, int h) {
     return true;
 }
 
+
+GdkGLContext* on_gl_create_context(GtkGLArea* area, gpointer)
+{
+    GError* error = nullptr;
+    GdkWindow* window = gtk_widget_get_window(GTK_WIDGET(area));
+    if (!window)
+        return nullptr;
+
+    GdkGLContext* context = gdk_window_create_gl_context(window, &error);
+    if (!context) {
+        g_warning("projectM: failed to create GL context: %s", error ? error->message : "unknown error");
+        g_clear_error(&error);
+        return nullptr;
+    }
+
+    // GtkGLArea requires >= 3.2; request desktop GL and allow compatibility.
+    gdk_gl_context_set_use_es(context, FALSE);
+    gdk_gl_context_set_required_version(context, 3, 2);
+    gdk_gl_context_set_forward_compatible(context, FALSE);
+
+    return context;
+}
+
 void on_gl_realize(GtkGLArea* area, gpointer) {
     g_message("projectM: GL realize");
     gtk_gl_area_make_current(area);
@@ -234,6 +257,7 @@ if (!logged) {
     // Avoid forcing GL pipeline state here: projectM manages its own render state,
     // and clobbering global state (notably blend/cull/depth settings) can result
     // in a fully black frame on some drivers/builds.
+    glBindVertexArray(dummy_vao);
     glViewport(0, 0, fb_w, fb_h);
     glClearColor(0.f, 0.f, 0.f, 1.f);
     glClear(GL_COLOR_BUFFER_BIT);
@@ -267,11 +291,10 @@ GtkWidget* create_gl_area() {
 
     gtk_gl_area_set_auto_render(GTK_GL_AREA(area), FALSE);
     gtk_gl_area_set_has_depth_buffer(GTK_GL_AREA(area), TRUE);
-    // projectM still relies on compatibility-profile GL on many builds.
-    // Requesting 3.3 often yields a core profile where nothing is drawn.
-    gtk_gl_area_set_required_version(GTK_GL_AREA(area), 2, 1);
+    gtk_gl_area_set_required_version(GTK_GL_AREA(area), 3, 2);
     gtk_gl_area_set_use_es(GTK_GL_AREA(area), FALSE);
 
+    g_signal_connect(area, "create-context", G_CALLBACK(on_gl_create_context), nullptr);
     g_signal_connect(area, "realize",   G_CALLBACK(on_gl_realize),   nullptr);
     g_signal_connect(area, "unrealize", G_CALLBACK(on_gl_unrealize), nullptr);
     g_signal_connect(area, "render",    G_CALLBACK(on_gl_render),    nullptr);
