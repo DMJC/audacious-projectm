@@ -273,7 +273,9 @@ GtkWidget* create_gl_area() {
 
     gtk_gl_area_set_auto_render(GTK_GL_AREA(area), FALSE);
     gtk_gl_area_set_has_depth_buffer(GTK_GL_AREA(area), TRUE);
-    gtk_gl_area_set_required_version(GTK_GL_AREA(area), 3, 3);
+    // projectM still relies on compatibility-profile GL on many builds.
+    // Requesting 3.3 often yields a core profile where nothing is drawn.
+    gtk_gl_area_set_required_version(GTK_GL_AREA(area), 2, 1);
     gtk_gl_area_set_use_es(GTK_GL_AREA(area), FALSE);
 
     g_signal_connect(area, "realize",   G_CALLBACK(on_gl_realize),   nullptr);
