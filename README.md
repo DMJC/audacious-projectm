@@ -8,3 +8,4 @@ ProjectM (Milkdrop) Visualizer for Audacious
 
 ## Screenshots
 <img width="1775" height="925" alt="image" src="https://github.com/user-attachments/assets/eced1a2b-c578-4e85-a6dc-b2edad99386b" />
+<img width="1754" height="923" alt="image" src="https://github.com/user-attachments/assets/833f7eba-5cb3-4f80-a429-1cd9e71fa676" />
