@@ -3,6 +3,7 @@
 
 #include <libaudcore/plugin.h>
 #include <libaudcore/i18n.h>
+#include <libaudcore/drct.h>
 
 #include <projectM-4/projectM.h>
 #include <projectM-4/render_opengl.h>
@@ -329,6 +330,63 @@ gboolean tick_cb(gpointer) {
     return G_SOURCE_CONTINUE;
 }
 
+static void toggle_fullscreen(GtkWidget* widget)
+{
+    GtkWidget* toplevel = gtk_widget_get_toplevel(widget);
+    if (!GTK_IS_WINDOW(toplevel))
+        return;
+
+    GdkWindow* gdk_window = gtk_widget_get_window(toplevel);
+    if (!gdk_window)
+        return;
+
+    GdkWindowState state = gdk_window_get_state(gdk_window);
+    if (state & GDK_WINDOW_STATE_FULLSCREEN)
+        gtk_window_unfullscreen(GTK_WINDOW(toplevel));
+    else
+        gtk_window_fullscreen(GTK_WINDOW(toplevel));
+}
+
+static gboolean on_key_press(GtkWidget* widget, GdkEventKey* event, gpointer)
+{
+    switch (event->keyval) {
+    case GDK_KEY_z:
+    case GDK_KEY_Z:
+        aud_drct_pl_prev();
+        return TRUE;
+    case GDK_KEY_x:
+    case GDK_KEY_X:
+        aud_drct_play();
+        return TRUE;
+    case GDK_KEY_c:
+    case GDK_KEY_C:
+        aud_drct_pause();
+        return TRUE;
+    case GDK_KEY_v:
+    case GDK_KEY_V:
+        aud_drct_stop();
+        return TRUE;
+    case GDK_KEY_b:
+    case GDK_KEY_B:
+        aud_drct_pl_next();
+        return TRUE;
+    case GDK_KEY_F11:
+        toggle_fullscreen(widget);
+        return TRUE;
+    case GDK_KEY_space:
+        {
+            std::lock_guard<std::mutex> lock(pm_mutex);
+            if (playlist)
+                projectm_playlist_play_next(playlist, true);
+        }
+        return TRUE;
+    default:
+        break;
+    }
+
+    return FALSE;
+}
+
 GtkWidget* create_gl_area() {
     GtkWidget* area = gtk_gl_area_new();
     gtk_widget_set_hexpand(area, TRUE);
@@ -338,11 +396,14 @@ GtkWidget* create_gl_area() {
     gtk_gl_area_set_has_depth_buffer(GTK_GL_AREA(area), TRUE);
     gtk_gl_area_set_required_version(GTK_GL_AREA(area), 3, 2);
     gtk_gl_area_set_use_es(GTK_GL_AREA(area), FALSE);
+    gtk_widget_set_can_focus(area, TRUE);
+    gtk_widget_add_events(area, GDK_KEY_PRESS_MASK);
 
     g_signal_connect(area, "create-context", G_CALLBACK(on_gl_create_context), nullptr);
     g_signal_connect(area, "realize",   G_CALLBACK(on_gl_realize),   nullptr);
     g_signal_connect(area, "unrealize", G_CALLBACK(on_gl_unrealize), nullptr);
     g_signal_connect(area, "render",    G_CALLBACK(on_gl_render),    nullptr);
+    g_signal_connect(area, "key-press-event", G_CALLBACK(on_key_press), nullptr);
 
     return area;
 }
@@ -398,6 +459,7 @@ public:
             gtk_init_check(nullptr, nullptr);
             gl_area = create_gl_area();
             gtk_widget_show(gl_area);
+            gtk_widget_grab_focus(gl_area);
             running.store(true, std::memory_order_relaxed);
             if (!tick_id)
                 tick_id = g_timeout_add(16, tick_cb, nullptr);
