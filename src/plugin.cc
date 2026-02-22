@@ -32,6 +32,11 @@ int fb_w = 0;
 int fb_h = 0;
 GLuint dummy_vao = 0;
 
+// FBO resources
+GLuint pm_fbo = 0;
+GLuint pm_fbo_tex = 0;
+GLuint pm_fbo_rbo = 0;
+
 std::atomic<bool> running{false};
 guint tick_id = 0;
 
@@ -74,20 +79,21 @@ static void init_playlist_locked()
 {
     const char* preset_dir = nullptr;
 
+    const char* env_preset_dir = g_getenv("PROJECTM_PRESET_DIR");
     const char* candidates[] = {
-        "/usr/share/projectM/presets",
-        "/usr/local/share/projectM/presets",
+        env_preset_dir,
+        "/usr/share/projectM/presets"
     };
 
     for (auto* d : candidates) {
-        if (d && g_file_test(d, G_FILE_TEST_IS_DIR)) {
+        if (d && d[0] != '\0' && g_file_test(d, G_FILE_TEST_IS_DIR)) {
             preset_dir = d;
             break;
         }
     }
 
     if (!preset_dir) {
-        g_warning("projectM: no preset directory found; create /usr/share/projectM/presets");
+        g_warning("projectM: no preset directory found; set PROJECTM_PRESET_DIR or install presets under /usr/share/projectM/presets");
         return;
     }
 
@@ -105,40 +111,104 @@ static void init_playlist_locked()
     projectm_playlist_set_preset_switched_event_callback(playlist, on_preset_switched, nullptr);
     projectm_playlist_set_preset_switch_failed_event_callback(playlist, on_preset_switch_failed, nullptr);
 
-
     uint32_t added = projectm_playlist_add_path(playlist, preset_dir, true, false);
     if (added == 0) {
-        g_message("projectM: add_path('%s') -> added=%u", preset_dir, added);
         g_warning("projectM: no presets added from %s", preset_dir);
         return;
     }
 
     g_message("projectM: added %u presets from %s", added, preset_dir);
 
-    // Set how long presets should run (you have this API)
     projectm_set_preset_duration(pm, 15.0);
 
-    // IMPORTANT: select a preset so projectM has something to render
     uint32_t idx = projectm_playlist_play_next(playlist, true);
     g_message("projectM: play_next(hard_cut=true) -> idx=%u", idx);
-    g_message("projectM: initial preset index=%u", idx);
 }
 
+static void destroy_fbo()
+{
+    if (pm_fbo) {
+        glDeleteFramebuffers(1, &pm_fbo);
+        pm_fbo = 0;
+    }
+    if (pm_fbo_tex) {
+        glDeleteTextures(1, &pm_fbo_tex);
+        pm_fbo_tex = 0;
+    }
+    if (pm_fbo_rbo) {
+        glDeleteRenderbuffers(1, &pm_fbo_rbo);
+        pm_fbo_rbo = 0;
+    }
+}
 
+static void create_or_resize_fbo(int w, int h)
+{
+    w = std::max(w, 1);
+    h = std::max(h, 1);
+
+    if (pm_fbo && fb_w == w && fb_h == h)
+        return;
+
+    destroy_fbo();
+
+    fb_w = w;
+    fb_h = h;
+
+    glGenTextures(1, &pm_fbo_tex);
+    glBindTexture(GL_TEXTURE_2D, pm_fbo_tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, fb_w, fb_h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    glGenFramebuffers(1, &pm_fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, pm_fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pm_fbo_tex, 0);
+
+    glGenRenderbuffers(1, &pm_fbo_rbo);
+    glBindRenderbuffer(GL_RENDERBUFFER, pm_fbo_rbo);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, fb_w, fb_h);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, pm_fbo_rbo);
+
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        g_warning("projectM: FBO incomplete");
+    }
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+// Bug 1 fixed: removed premature render call and dead playlist block.
+// Correct order: create pm -> set params -> create FBO -> init playlist.
 bool pm_create_locked(int w, int h) {
     pm = projectm_create();
-    if (!pm) {
-        g_warning("projectM: projectm_create() failed (GL context not ready?)");
-        return false;
-    }
+    if (!pm) return false;
+
     fb_w = std::max(w, 1);
     fb_h = std::max(h, 1);
-
     projectm_set_window_size(pm, fb_w, fb_h);
     projectm_set_mesh_size(pm, 64, 48);
-    glViewport(0, 0, fb_w, fb_h);
+    projectm_set_fps(pm, 60.0f);
     init_playlist_locked();
     return true;
+}
+
+GdkGLContext* on_gl_create_context(GtkGLArea* area, gpointer)
+{
+    GError* error = nullptr;
+    GdkWindow* window = gtk_widget_get_window(GTK_WIDGET(area));
+    if (!window)
+        return nullptr;
+
+    GdkGLContext* context = gdk_window_create_gl_context(window, &error);
+    if (!context) {
+        g_clear_error(&error);
+        return nullptr;
+    }
+
+    gdk_gl_context_set_use_es(context, FALSE);
+    gdk_gl_context_set_required_version(context, 3, 2);
+    gdk_gl_context_set_forward_compatible(context, FALSE);
+
+    return context;
 }
 
 void on_gl_realize(GtkGLArea* area, gpointer) {
@@ -165,6 +235,9 @@ void on_gl_realize(GtkGLArea* area, gpointer) {
 void on_gl_unrealize(GtkGLArea* area, gpointer) {
     gtk_gl_area_make_current(area);
     std::lock_guard<std::mutex> lock(pm_mutex);
+
+    destroy_fbo();
+
     if (dummy_vao) {
         glDeleteVertexArrays(1, &dummy_vao);
         dummy_vao = 0;
@@ -182,25 +255,22 @@ static void drain_audio_into_projectm_locked() {
 
     size_t got = audio_ring.pop(drain_buf.data(), frames);
     static unsigned n = 0;
-    if ((++n % 120) == 0) { // ~2 seconds at 60fps
-        g_message("projectM: pop got=%zu frames", got);
-    }
     if (got < frames) {
         std::fill(drain_buf.begin() + got * 2, drain_buf.end(), 0.0f);
     }
 
-    // count = number of float samples (interleaved stereo)
-    projectm_pcm_add_float(pm, drain_buf.data(), (unsigned)(frames * 2), PROJECTM_STEREO);
+    // Bug 3 fixed: pass frame count (per-channel sample count), not frames*2.
+    // PROJECTM_STEREO expects interleaved LRLR... with count = frames, not total floats.
+    projectm_pcm_add_float(pm, drain_buf.data(), (unsigned)frames, PROJECTM_STEREO);
 }
-
 
 gboolean on_gl_render(GtkGLArea* area, GdkGLContext*, gpointer) {
-static bool logged = false;
-if (!logged) {
-    logged = true;
-    g_message("GL_VERSION=%s", glGetString(GL_VERSION));
-    g_message("GL_RENDERER=%s", glGetString(GL_RENDERER));
-}
+    static bool logged = false;
+    if (!logged) {
+        logged = true;
+        g_message("GL_VERSION=%s", glGetString(GL_VERSION));
+        g_message("GL_RENDERER=%s", glGetString(GL_RENDERER));
+    }
 
     gtk_gl_area_make_current(area);
     if (gtk_gl_area_get_error(area))
@@ -210,6 +280,10 @@ if (!logged) {
     if (!pm)
         return TRUE;
 
+    // CRITICAL: GtkGLArea's default FBO is NOT 0. Query it here.
+    GLint gtk_default_fbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &gtk_default_fbo);
+
     int scale = current_scale_factor(GTK_WIDGET(area));
     int w = gtk_widget_get_allocated_width(GTK_WIDGET(area)) * scale;
     int h = gtk_widget_get_allocated_height(GTK_WIDGET(area)) * scale;
@@ -217,28 +291,24 @@ if (!logged) {
     h = std::max(h, 1);
 
     if (w != fb_w || h != fb_h) {
-        fb_w = w; fb_h = h;
+        fb_w = w;
+        fb_h = h;
         projectm_set_window_size(pm, fb_w, fb_h);
-        glViewport(0, 0, fb_w, fb_h);
     }
 
     drain_audio_into_projectm_locked();
 
-    // Core-profile safe baseline state
     glBindVertexArray(dummy_vao);
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_STENCIL_TEST);
-    glDisable(GL_SCISSOR_TEST);
-    glDisable(GL_CULL_FACE);
-    glDisable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glViewport(0, 0, fb_w, fb_h);
-    glClearColor(0.f, 0.f, 0.f, 1.f);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glBindVertexArray(dummy_vao);
-    projectm_opengl_render_frame(pm);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-    // Log GL errors once in a while
+    // Render projectM directly into GtkGLArea's own FBO.
+    // No separate pm_fbo needed — GTK's FBO is the render target.
+    projectm_opengl_render_frame_fbo(pm, (GLuint)gtk_default_fbo);
+
     static unsigned errn = 0;
     if ((++errn % 120) == 0) {
         for (GLenum e = glGetError(); e != GL_NO_ERROR; e = glGetError()) {
@@ -246,7 +316,7 @@ if (!logged) {
         }
     }
 
-return TRUE;
+    return TRUE;
 }
 
 gboolean tick_cb(gpointer) {
@@ -266,9 +336,10 @@ GtkWidget* create_gl_area() {
 
     gtk_gl_area_set_auto_render(GTK_GL_AREA(area), FALSE);
     gtk_gl_area_set_has_depth_buffer(GTK_GL_AREA(area), TRUE);
-    gtk_gl_area_set_required_version(GTK_GL_AREA(area), 3, 3);
+    gtk_gl_area_set_required_version(GTK_GL_AREA(area), 3, 2);
     gtk_gl_area_set_use_es(GTK_GL_AREA(area), FALSE);
 
+    g_signal_connect(area, "create-context", G_CALLBACK(on_gl_create_context), nullptr);
     g_signal_connect(area, "realize",   G_CALLBACK(on_gl_realize),   nullptr);
     g_signal_connect(area, "unrealize", G_CALLBACK(on_gl_unrealize), nullptr);
     g_signal_connect(area, "render",    G_CALLBACK(on_gl_render),    nullptr);
@@ -283,13 +354,11 @@ void push_multi_pcm_as_stereo(const float* pcm, int channels) {
 
     constexpr int frames = 512;
 
-    // Fast path: already stereo interleaved
     if (channels == 2) {
         audio_ring.push(pcm, frames);
         return;
     }
 
-    // Mix down/up to stereo: take ch0/ch1 if available, otherwise duplicate ch0
     std::vector<float> tmp;
     tmp.resize(frames * 2);
 
@@ -318,17 +387,11 @@ public:
     void clear() override {
         audio_ring.clear();
         std::lock_guard<std::mutex> lock(pm_mutex);
-        // optional: reset projectM state if desired
     }
 
     void render_multi_pcm(const float* pcm, int channels) override {
-        static unsigned calls = 0;
-        if ((++calls % 200) == 0) {
-            g_message("projectM: render_multi_pcm calls=%u channels=%d", calls, channels);
-        }
         push_multi_pcm_as_stereo(pcm, channels);
     }
-
 
     void* get_gtk_widget() override {
         if (!gl_area) {
@@ -359,12 +422,12 @@ public:
 
         std::lock_guard<std::mutex> lock(pm_mutex);
         pm_destroy_locked();
+        destroy_fbo();
     }
 };
 
 extern "C" {
 
-// Force the symbol to be exported in the dynamic symbol table.
 __attribute__((visibility("default")))
 ProjectMVis aud_plugin_instance;
 
