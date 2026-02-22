@@ -39,6 +39,11 @@ GLuint pm_fbo_tex = 0;
 GLuint pm_fbo_rbo = 0;
 
 std::atomic<bool> running{false};
+
+// Deferred preset-switch request: set from key handler, consumed in on_gl_render
+// where the GL context is guaranteed to be current.
+std::atomic<bool> request_next_preset{false};
+
 guint tick_id = 0;
 
 // ~2 seconds at 48kHz
@@ -177,8 +182,6 @@ static void create_or_resize_fbo(int w, int h)
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-// Bug 1 fixed: removed premature render call and dead playlist block.
-// Correct order: create pm -> set params -> create FBO -> init playlist.
 bool pm_create_locked(int w, int h) {
     pm = projectm_create();
     if (!pm) return false;
@@ -255,13 +258,10 @@ static void drain_audio_into_projectm_locked() {
     drain_buf.resize(frames * 2);
 
     size_t got = audio_ring.pop(drain_buf.data(), frames);
-    static unsigned n = 0;
     if (got < frames) {
         std::fill(drain_buf.begin() + got * 2, drain_buf.end(), 0.0f);
     }
 
-    // Bug 3 fixed: pass frame count (per-channel sample count), not frames*2.
-    // PROJECTM_STEREO expects interleaved LRLR... with count = frames, not total floats.
     projectm_pcm_add_float(pm, drain_buf.data(), (unsigned)frames, PROJECTM_STEREO);
 }
 
@@ -280,6 +280,15 @@ gboolean on_gl_render(GtkGLArea* area, GdkGLContext*, gpointer) {
     std::lock_guard<std::mutex> lock(pm_mutex);
     if (!pm)
         return TRUE;
+
+    // Consume deferred preset-switch request here, where the GL context is
+    // guaranteed current. projectm_playlist_play_next() triggers shader
+    // compilation and texture uploads internally — it must never be called
+    // from a non-render path (e.g. key handlers) that has no current context.
+    if (request_next_preset.exchange(false, std::memory_order_relaxed)) {
+        if (playlist)
+            projectm_playlist_play_next(playlist, true);
+    }
 
     // CRITICAL: GtkGLArea's default FBO is NOT 0. Query it here.
     GLint gtk_default_fbo = 0;
@@ -306,8 +315,6 @@ gboolean on_gl_render(GtkGLArea* area, GdkGLContext*, gpointer) {
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-    // Render projectM directly into GtkGLArea's own FBO.
-    // No separate pm_fbo needed — GTK's FBO is the render target.
     projectm_opengl_render_frame_fbo(pm, (GLuint)gtk_default_fbo);
 
     static unsigned errn = 0;
@@ -374,11 +381,10 @@ static gboolean on_key_press(GtkWidget* widget, GdkEventKey* event, gpointer)
         toggle_fullscreen(widget);
         return TRUE;
     case GDK_KEY_space:
-        {
-            std::lock_guard<std::mutex> lock(pm_mutex);
-            if (playlist)
-                projectm_playlist_play_next(playlist, true);
-        }
+        // Do NOT call projectm_playlist_play_next() here. The GL context is
+        // not current in an event handler. Set a flag and let on_gl_render
+        // consume it safely with the context active.
+        request_next_preset.store(true, std::memory_order_relaxed);
         return TRUE;
     default:
         break;
@@ -400,10 +406,10 @@ GtkWidget* create_gl_area() {
     gtk_widget_add_events(area, GDK_KEY_PRESS_MASK);
 
     g_signal_connect(area, "create-context", G_CALLBACK(on_gl_create_context), nullptr);
-    g_signal_connect(area, "realize",   G_CALLBACK(on_gl_realize),   nullptr);
-    g_signal_connect(area, "unrealize", G_CALLBACK(on_gl_unrealize), nullptr);
-    g_signal_connect(area, "render",    G_CALLBACK(on_gl_render),    nullptr);
-    g_signal_connect(area, "key-press-event", G_CALLBACK(on_key_press), nullptr);
+    g_signal_connect(area, "realize",        G_CALLBACK(on_gl_realize),         nullptr);
+    g_signal_connect(area, "unrealize",      G_CALLBACK(on_gl_unrealize),       nullptr);
+    g_signal_connect(area, "render",         G_CALLBACK(on_gl_render),          nullptr);
+    g_signal_connect(area, "key-press-event",G_CALLBACK(on_key_press),          nullptr);
 
     return area;
 }
@@ -471,6 +477,7 @@ public:
 
     void cleanup() override {
         running.store(false, std::memory_order_relaxed);
+        request_next_preset.store(false, std::memory_order_relaxed);
 
         if (tick_id) {
             g_source_remove(tick_id);
