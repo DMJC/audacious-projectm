@@ -515,15 +515,10 @@ static void destroy_gtk_widgets()
 
 static void reset_gtk_widget_path()
 {
-    if (gl_container) {
-        gtk_widget_destroy(gl_container);
-        gl_container = nullptr;
-    }
-
-    if (gl_area) {
-        gtk_widget_destroy(gl_area);
-        gl_area = nullptr;
-    }
+    // Destroy either the container or the bare GL area, but never both.
+    // If gl_container exists it owns gl_area; destroying both can double-destroy
+    // the child and leave stale object state behind.
+    destroy_gtk_widgets();
 }
 
 GtkWidget* create_gl_area() {
