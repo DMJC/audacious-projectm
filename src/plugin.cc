@@ -27,6 +27,7 @@
 #include <atomic>
 #include <algorithm>
 #include <mutex>
+#include <string>
 #include <vector>
 
 #include "ringbuf.h"
@@ -83,6 +84,7 @@ static const PluginPreferences prefs_page = {{prefs_widgets}};
 
 namespace {
 
+GtkWidget* gl_container = nullptr;
 GtkWidget* gl_area = nullptr;
 class ProjectMQtWidget;
 QPointer<ProjectMQtWidget> qt_widget;
@@ -90,6 +92,7 @@ QPointer<ProjectMQtWidget> qt_widget;
 std::mutex pm_mutex;
 projectm_handle pm = nullptr;
 projectm_playlist_handle playlist = nullptr;
+std::string loaded_preset_dir;
 
 int fb_w = 0;
 int fb_h = 0;
@@ -139,6 +142,7 @@ gint current_scale_factor(GtkWidget* w) {
 void pm_destroy_locked() {
     if (playlist) { projectm_playlist_destroy(playlist); playlist = nullptr; }
     if (pm)       { projectm_destroy(pm);                pm = nullptr;       }
+    loaded_preset_dir.clear();
 }
 
 static void on_preset_switched(bool hard_cut, unsigned int index, void*)
@@ -167,6 +171,7 @@ static void init_playlist_locked()
     if (!g_file_test((const char*)preset_dir, G_FILE_TEST_IS_DIR)) {
         g_warning("projectM: preset directory not found: %s",
                   (const char*)preset_dir);
+        loaded_preset_dir.clear();
         return;
     }
 
@@ -184,11 +189,13 @@ static void init_playlist_locked()
         playlist, (const char*)preset_dir, true, false);
     if (added == 0) {
         g_warning("projectM: no presets added from %s", (const char*)preset_dir);
+        loaded_preset_dir.clear();
         return;
     }
     g_message("projectM: added %u presets from %s", added, (const char*)preset_dir);
 
     projectm_set_preset_duration(pm, (double)get_preset_duration());
+    loaded_preset_dir = (const char*)preset_dir;
 
     uint32_t idx = projectm_playlist_play_next(playlist, true);
     g_message("projectM: play_next(hard_cut=true) -> idx=%u", idx);
@@ -202,6 +209,19 @@ static void apply_live_settings_locked()
     projectm_set_fps(pm, (float)get_fps());
     projectm_set_preset_duration(pm, (double)get_preset_duration());
     projectm_set_mesh_size(pm, (unsigned)get_mesh_w(), (unsigned)get_mesh_h());
+}
+
+static bool playlist_rebuild_needed_locked()
+{
+    String preset_dir = get_preset_dir();
+    const char* env_dir = g_getenv("PROJECTM_PRESET_DIR");
+    if (env_dir && env_dir[0] != '\0' && g_file_test(env_dir, G_FILE_TEST_IS_DIR))
+        preset_dir = String(env_dir);
+
+    if (!playlist)
+        return true;
+
+    return loaded_preset_dir != (const char*)preset_dir;
 }
 
 bool pm_create_locked(int w, int h) {
@@ -286,7 +306,8 @@ gboolean on_gl_render(GtkGLArea* area, GdkGLContext*, gpointer) {
     // Preset dir change also rebuilds the playlist.
     if (settings_changed.exchange(false, std::memory_order_relaxed)) {
         apply_live_settings_locked();
-        init_playlist_locked();
+        if (playlist_rebuild_needed_locked())
+            init_playlist_locked();
     }
 
     // Deferred: preset skip requested from spacebar key handler.
@@ -406,7 +427,8 @@ protected:
 
         if (settings_changed.exchange(false, std::memory_order_relaxed)) {
             apply_live_settings_locked();
-            init_playlist_locked();
+            if (playlist_rebuild_needed_locked())
+                init_playlist_locked();
             refresh_tick_rate();
         }
 
@@ -545,16 +567,22 @@ public:
     }
 
     void* get_gtk_widget() override {
-        if (!gl_area) {
+        if (!gl_container) {
             gtk_init_check(nullptr, nullptr);
+            gl_container = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+            gtk_widget_set_hexpand(gl_container, TRUE);
+            gtk_widget_set_vexpand(gl_container, TRUE);
+
             gl_area = create_gl_area();
-            gtk_widget_show(gl_area);
+            gtk_box_pack_start(GTK_BOX(gl_container), gl_area, TRUE, TRUE, 0);
+
+            gtk_widget_show_all(gl_container);
             gtk_widget_grab_focus(gl_area);
             running.store(true, std::memory_order_relaxed);
             if (!tick_id)
                 tick_id = g_timeout_add(1000 / get_fps(), tick_cb, nullptr);
         }
-        return gl_area;
+        return gl_container;
     }
 
     void* get_qt_widget() override {
@@ -576,10 +604,11 @@ public:
 
         if (tick_id) { g_source_remove(tick_id); tick_id = 0; }
 
-        if (gl_area) {
-            gtk_widget_destroy(gl_area);
-            gl_area = nullptr;
+        if (gl_container) {
+            gtk_widget_destroy(gl_container);
+            gl_container = nullptr;
         }
+        gl_area = nullptr;
 
         if (qt_widget)
             qt_widget->close();
