@@ -244,6 +244,9 @@ protected:
 
         drain_audio_into_projectm_locked();
 
+        const GLuint qt_fbo = (GLuint) defaultFramebufferObject();
+        glBindFramebuffer(GL_FRAMEBUFFER, qt_fbo);
+
         glBindVertexArray(dummy_vao);
         glViewport(0, 0, fb_w, fb_h);
         glDisable(GL_DEPTH_TEST);
@@ -251,7 +254,7 @@ protected:
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-        projectm_opengl_render_frame(pm);
+        projectm_opengl_render_frame_fbo(pm, qt_fbo);
     }
 
     void keyPressEvent(QKeyEvent * event) override {
