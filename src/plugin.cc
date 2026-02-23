@@ -493,14 +493,17 @@ private:
 
 static void destroy_gtk_widgets()
 {
-    if (gl_area)
-        gtk_widget_destroy(gl_area);
+    if (!gl_area)
+        return;
 
+    gtk_widget_destroy(gl_area);
+    g_object_unref(gl_area);
     gl_area = nullptr;
 }
 
 GtkWidget* create_gl_area() {
     GtkWidget* area = gtk_gl_area_new();
+    g_object_ref_sink(area);
     gtk_widget_set_hexpand(area, TRUE);
     gtk_widget_set_vexpand(area, TRUE);
     gtk_gl_area_set_auto_render(GTK_GL_AREA(area), FALSE);
@@ -516,7 +519,6 @@ GtkWidget* create_gl_area() {
     g_signal_connect(area, "render",          G_CALLBACK(on_gl_render),         nullptr);
     g_signal_connect(area, "key-press-event", G_CALLBACK(on_key_press),         nullptr);
 
-    g_object_add_weak_pointer(G_OBJECT(area), (gpointer*)&gl_area);
     return area;
 }
 
