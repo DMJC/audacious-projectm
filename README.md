@@ -1,11 +1,23 @@
 # Audacious-ProjectM
-ProjectM (Milkdrop) Visualizer for Audacious
+ProjectM (Milkdrop) visualizer plugins for Audacious.
+
+## What changed
+- Added a Qt6 visualizer plugin build (`projectm-qt6`).
+- Kept the existing GTK3 visualizer plugin build (`projectm-gtk`).
+- Updated the build/loader output so Audacious can load either GTK3 or Qt6 plugin modules from the same Visualization plugin directory.
+
 ## Requirements
 - [LibProjectM4](https://github.com/projectM-visualizer/projectm/releases/tag/v4.1.6)
 - libaudacious-dev
 - libgtk+-3.0-dev
 - libepoxy-dev
+- qt6-base-dev
 
-## Screenshots
-<img width="1775" height="925" alt="image" src="https://github.com/user-attachments/assets/eced1a2b-c578-4e85-a6dc-b2edad99386b" />
-<img width="1754" height="923" alt="image" src="https://github.com/user-attachments/assets/833f7eba-5cb3-4f80-a429-1cd9e71fa676" />
+## Build
+```bash
+meson setup build
+meson compile -C build
+meson install -C build
+```
+
+Audacious will detect both plugin modules (`projectm-gtk` and `projectm-qt6`) under `.../audacious/Visualization`.
