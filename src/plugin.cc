@@ -1,6 +1,13 @@
 #include <gtk/gtk.h>
 #include <epoxy/gl.h>
 
+#include <QDebug>
+#include <QKeyEvent>
+#include <QOpenGLWidget>
+#include <QPointer>
+#include <QSurfaceFormat>
+#include <QTimer>
+
 #include <libaudcore/plugin.h>
 #include <libaudcore/i18n.h>
 #include <libaudcore/drct.h>
@@ -77,6 +84,8 @@ static const PluginPreferences prefs_page = {{prefs_widgets}};
 namespace {
 
 GtkWidget* gl_area = nullptr;
+class ProjectMQtWidget;
+QPointer<ProjectMQtWidget> qt_widget;
 
 std::mutex pm_mutex;
 projectm_handle pm = nullptr;
@@ -300,6 +309,7 @@ gboolean on_gl_render(GtkGLArea* area, GdkGLContext*, gpointer) {
 
     drain_audio_into_projectm_locked();
 
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint) gtk_default_fbo);
     glBindVertexArray(dummy_vao);
     glViewport(0, 0, fb_w, fb_h);
     glDisable(GL_DEPTH_TEST);
@@ -307,7 +317,7 @@ gboolean on_gl_render(GtkGLArea* area, GdkGLContext*, gpointer) {
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-    projectm_opengl_render_frame_fbo(pm, (GLuint)gtk_default_fbo);
+    projectm_opengl_render_frame_fbo(pm, (GLuint) gtk_default_fbo);
 
     static unsigned errn = 0;
     if ((++errn % 120) == 0) {
@@ -354,6 +364,109 @@ static gboolean on_key_press(GtkWidget* widget, GdkEventKey* event, gpointer)
     }
     return FALSE;
 }
+
+
+class ProjectMQtWidget final : public QOpenGLWidget {
+public:
+    explicit ProjectMQtWidget(QWidget* parent = nullptr) : QOpenGLWidget(parent)
+    {
+        QSurfaceFormat fmt = format();
+        fmt.setVersion(3, 2);
+        fmt.setProfile(QSurfaceFormat::CoreProfile);
+        setFormat(fmt);
+        setFocusPolicy(Qt::StrongFocus);
+
+        tick.setSingleShot(false);
+        QObject::connect(&tick, &QTimer::timeout, this, [this]() { update(); });
+        tick.start(std::max(1, 1000 / get_fps()));
+    }
+
+    ~ProjectMQtWidget() override {
+        std::lock_guard<std::mutex> lock(pm_mutex);
+        pm_destroy_locked();
+    }
+
+    void refresh_tick_rate() {
+        tick.start(std::max(1, 1000 / get_fps()));
+    }
+
+protected:
+    void initializeGL() override {
+        if (!dummy_vao) glGenVertexArrays(1, &dummy_vao);
+        glBindVertexArray(dummy_vao);
+
+        std::lock_guard<std::mutex> lock(pm_mutex);
+        pm_destroy_locked();
+        pm_create_locked(width() * devicePixelRatio(), height() * devicePixelRatio());
+    }
+
+    void paintGL() override {
+        std::lock_guard<std::mutex> lock(pm_mutex);
+        if (!pm) return;
+
+        if (settings_changed.exchange(false, std::memory_order_relaxed)) {
+            apply_live_settings_locked();
+            init_playlist_locked();
+            refresh_tick_rate();
+        }
+
+        if (request_next_preset.exchange(false, std::memory_order_relaxed) && playlist)
+            projectm_playlist_play_next(playlist, true);
+
+        int w = std::max((int) (width() * devicePixelRatio()), 1);
+        int h = std::max((int) (height() * devicePixelRatio()), 1);
+        if (w != fb_w || h != fb_h) {
+            fb_w = w;
+            fb_h = h;
+            projectm_set_window_size(pm, fb_w, fb_h);
+        }
+
+        drain_audio_into_projectm_locked();
+
+        const GLuint qt_fbo = (GLuint) defaultFramebufferObject();
+        glBindFramebuffer(GL_FRAMEBUFFER, qt_fbo);
+        glBindVertexArray(dummy_vao);
+        glViewport(0, 0, fb_w, fb_h);
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_CULL_FACE);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+        projectm_opengl_render_frame_fbo(pm, qt_fbo);
+    }
+
+    void keyPressEvent(QKeyEvent* event) override {
+        switch (event->key()) {
+        case Qt::Key_Z: aud_drct_pl_prev(); return;
+        case Qt::Key_X: aud_drct_play(); return;
+        case Qt::Key_C: aud_drct_pause(); return;
+        case Qt::Key_V: aud_drct_stop(); return;
+        case Qt::Key_B: aud_drct_pl_next(); return;
+        case Qt::Key_F11:
+            if (window()->isFullScreen()) window()->showNormal();
+            else window()->showFullScreen();
+            return;
+        case Qt::Key_Space:
+            request_next_preset.store(true, std::memory_order_relaxed);
+            return;
+        default:
+            QOpenGLWidget::keyPressEvent(event);
+            return;
+        }
+    }
+
+    void resizeGL(int w, int h) override {
+        std::lock_guard<std::mutex> lock(pm_mutex);
+        if (pm) {
+            fb_w = std::max((int) (w * devicePixelRatio()), 1);
+            fb_h = std::max((int) (h * devicePixelRatio()), 1);
+            projectm_set_window_size(pm, fb_w, fb_h);
+        }
+    }
+
+private:
+    QTimer tick;
+};
 
 GtkWidget* create_gl_area() {
     GtkWidget* area = gtk_gl_area_new();
@@ -402,8 +515,8 @@ static void on_config_changed(void*, void*)
 // ---------------------------------------------------------------------------
 
 static constexpr PluginInfo projectm_info = {
-    N_("projectM Visualizer (GTK3)"),
-    N_("projectM visualizer using GtkGLArea/OpenGL"),
+    N_("projectM Visualizer"),
+    N_("projectM visualizer using GTK3/Qt6 OpenGL widgets"),
     N_("Renders projectM visuals (MilkDrop-style) using OpenGL."),
     &prefs_page
 };
@@ -444,6 +557,16 @@ public:
         return gl_area;
     }
 
+    void* get_qt_widget() override {
+        if (!qt_widget) {
+            qt_widget = new ProjectMQtWidget();
+            QObject::connect(qt_widget, &QObject::destroyed, [](QObject*) {
+                qt_widget = nullptr;
+            });
+        }
+        return qt_widget;
+    }
+
     void cleanup() override {
         hook_dissociate("set " PLUGIN_DOMAIN, on_config_changed);
 
@@ -457,6 +580,10 @@ public:
             gtk_widget_destroy(gl_area);
             gl_area = nullptr;
         }
+
+        if (qt_widget)
+            qt_widget->close();
+        qt_widget = nullptr;
 
         std::lock_guard<std::mutex> lock(pm_mutex);
         pm_destroy_locked();
