@@ -84,7 +84,6 @@ static const PluginPreferences prefs_page = {{prefs_widgets}};
 
 namespace {
 
-GtkWidget* gl_container = nullptr;
 GtkWidget* gl_area = nullptr;
 class ProjectMQtWidget;
 QPointer<ProjectMQtWidget> qt_widget;
@@ -492,33 +491,12 @@ private:
 };
 
 
-static bool use_legacy_gtk_widget_path()
-{
-    String iface = aud_get_str("audacious", "interface");
-    if (!iface || !iface[0])
-        return false;
-
-    return g_ascii_strcasecmp((const char*)iface, "skins") == 0 ||
-           g_ascii_strcasecmp((const char*)iface, "winamp") == 0;
-}
-
 static void destroy_gtk_widgets()
 {
-    if (gl_container)
-        gtk_widget_destroy(gl_container);
-    else if (gl_area)
+    if (gl_area)
         gtk_widget_destroy(gl_area);
 
-    gl_container = nullptr;
     gl_area = nullptr;
-}
-
-static void reset_gtk_widget_path()
-{
-    // Destroy either the container or the bare GL area, but never both.
-    // If gl_container exists it owns gl_area; destroying both can double-destroy
-    // the child and leave stale object state behind.
-    destroy_gtk_widgets();
 }
 
 GtkWidget* create_gl_area() {
@@ -601,42 +579,20 @@ public:
     void* get_gtk_widget() override {
         gtk_init_check(nullptr, nullptr);
 
-        const bool legacy_widget = use_legacy_gtk_widget_path();
-
-        if (legacy_widget) {
-            if (gl_container)
-                reset_gtk_widget_path();
-
-            if (!gl_area)
-                gl_area = create_gl_area();
-
-            gtk_widget_show(gl_area);
-            gtk_widget_grab_focus(gl_area);
-            running.store(true, std::memory_order_relaxed);
-            if (!tick_id)
-                tick_id = g_timeout_add(1000 / get_fps(), tick_cb, nullptr);
-            return gl_area;
-        }
-
-        if (!gl_container) {
-            if (gl_area)
-                reset_gtk_widget_path();
-
+        if (!gl_area)
             gl_area = create_gl_area();
-            gl_container = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-            g_object_add_weak_pointer(G_OBJECT(gl_container), (gpointer*)&gl_container);
-            gtk_widget_set_hexpand(gl_container, TRUE);
-            gtk_widget_set_vexpand(gl_container, TRUE);
 
-            gtk_box_pack_start(GTK_BOX(gl_container), gl_area, TRUE, TRUE, 0);
 
-            gtk_widget_show_all(gl_container);
-            gtk_widget_grab_focus(gl_area);
-            running.store(true, std::memory_order_relaxed);
-            if (!tick_id)
-                tick_id = g_timeout_add(1000 / get_fps(), tick_cb, nullptr);
-        }
-        return gl_container;
+        GtkWidget* parent = gtk_widget_get_parent(gl_area);
+        if (parent)
+            gtk_container_remove(GTK_CONTAINER(parent), gl_area);
+
+        gtk_widget_show(gl_area);
+        gtk_widget_grab_focus(gl_area);
+        running.store(true, std::memory_order_relaxed);
+        if (!tick_id)
+            tick_id = g_timeout_add(1000 / get_fps(), tick_cb, nullptr);
+        return gl_area;
     }
 
     void* get_qt_widget() override {
