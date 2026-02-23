@@ -513,6 +513,19 @@ static void destroy_gtk_widgets()
     gl_area = nullptr;
 }
 
+static void reset_gtk_widget_path()
+{
+    if (gl_container) {
+        gtk_widget_destroy(gl_container);
+        gl_container = nullptr;
+    }
+
+    if (gl_area) {
+        gtk_widget_destroy(gl_area);
+        gl_area = nullptr;
+    }
+}
+
 GtkWidget* create_gl_area() {
     GtkWidget* area = gtk_gl_area_new();
     gtk_widget_set_hexpand(area, TRUE);
@@ -593,21 +606,14 @@ public:
     void* get_gtk_widget() override {
         gtk_init_check(nullptr, nullptr);
 
-        if (!gl_area)
-            gl_area = create_gl_area();
-
         const bool legacy_widget = use_legacy_gtk_widget_path();
 
         if (legacy_widget) {
-            if (gl_container) {
-                GtkWidget* parent = gtk_widget_get_parent(gl_area);
-                if (parent)
-                    gtk_container_remove(GTK_CONTAINER(parent), gl_area);
+            if (gl_container)
+                reset_gtk_widget_path();
 
-                gtk_widget_destroy(gl_container);
-                gl_container = nullptr;
-
-            }
+            if (!gl_area)
+                gl_area = create_gl_area();
 
             gtk_widget_show(gl_area);
             gtk_widget_grab_focus(gl_area);
@@ -618,14 +624,14 @@ public:
         }
 
         if (!gl_container) {
+            if (gl_area)
+                reset_gtk_widget_path();
+
+            gl_area = create_gl_area();
             gl_container = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
             g_object_add_weak_pointer(G_OBJECT(gl_container), (gpointer*)&gl_container);
             gtk_widget_set_hexpand(gl_container, TRUE);
             gtk_widget_set_vexpand(gl_container, TRUE);
-
-            GtkWidget* parent = gtk_widget_get_parent(gl_area);
-            if (parent)
-                gtk_container_remove(GTK_CONTAINER(parent), gl_area);
 
             gtk_box_pack_start(GTK_BOX(gl_container), gl_area, TRUE, TRUE, 0);
 
