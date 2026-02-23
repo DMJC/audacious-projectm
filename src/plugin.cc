@@ -490,6 +490,32 @@ private:
     QTimer tick;
 };
 
+
+static bool use_legacy_gtk_widget_path()
+{
+    String iface = aud_get_str("audacious", "interface");
+    if (!iface || !iface[0])
+        return false;
+
+    return g_ascii_strcasecmp((const char*)iface, "skins") == 0 ||
+           g_ascii_strcasecmp((const char*)iface, "winamp") == 0;
+}
+
+static void destroy_gtk_widgets()
+{
+    if (gl_container) {
+        gtk_widget_destroy(gl_container);
+        gl_container = nullptr;
+        gl_area = nullptr;
+        return;
+    }
+
+    if (gl_area) {
+        gtk_widget_destroy(gl_area);
+        gl_area = nullptr;
+    }
+}
+
 GtkWidget* create_gl_area() {
     GtkWidget* area = gtk_gl_area_new();
     gtk_widget_set_hexpand(area, TRUE);
@@ -567,8 +593,29 @@ public:
     }
 
     void* get_gtk_widget() override {
+        gtk_init_check(nullptr, nullptr);
+
+        const bool legacy_widget = use_legacy_gtk_widget_path();
+
+        if (legacy_widget) {
+            if (gl_container)
+                destroy_gtk_widgets();
+
+            if (!gl_area)
+                gl_area = create_gl_area();
+
+            gtk_widget_show(gl_area);
+            gtk_widget_grab_focus(gl_area);
+            running.store(true, std::memory_order_relaxed);
+            if (!tick_id)
+                tick_id = g_timeout_add(1000 / get_fps(), tick_cb, nullptr);
+            return gl_area;
+        }
+
         if (!gl_container) {
-            gtk_init_check(nullptr, nullptr);
+            if (gl_area)
+                destroy_gtk_widgets();
+
             gl_container = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
             gtk_widget_set_hexpand(gl_container, TRUE);
             gtk_widget_set_vexpand(gl_container, TRUE);
@@ -604,11 +651,7 @@ public:
 
         if (tick_id) { g_source_remove(tick_id); tick_id = 0; }
 
-        if (gl_container) {
-            gtk_widget_destroy(gl_container);
-            gl_container = nullptr;
-        }
-        gl_area = nullptr;
+        destroy_gtk_widgets();
 
         if (qt_widget)
             qt_widget->close();
