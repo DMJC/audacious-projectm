@@ -1,10 +1,10 @@
 #include <epoxy/gl.h>
 
-#include <QCloseEvent>
 #include <QDebug>
 #include <QFileInfo>
 #include <QKeyEvent>
 #include <QOpenGLWidget>
+#include <QPointer>
 #include <QSurfaceFormat>
 #include <QTimer>
 #include <QWidget>
@@ -202,6 +202,11 @@ public:
         tick.start(std::max(1, 1000 / get_fps()));
     }
 
+    ~ProjectMQtWidget() override {
+        std::lock_guard<std::mutex> lock(pm_mutex);
+        pm_destroy_locked();
+    }
+
     void refresh_tick_rate() {
         tick.start(std::max(1, 1000 / get_fps()));
     }
@@ -278,21 +283,11 @@ protected:
         }
     }
 
-    void closeEvent(QCloseEvent * event) override {
-        QOpenGLWidget::closeEvent(event);
-        std::lock_guard<std::mutex> lock(pm_mutex);
-        if (dummy_vao) {
-            glDeleteVertexArrays(1, &dummy_vao);
-            dummy_vao = 0;
-        }
-        pm_destroy_locked();
-    }
-
 private:
     QTimer tick;
 };
 
-ProjectMQtWidget * qt_widget = nullptr;
+QPointer<ProjectMQtWidget> qt_widget;
 
 void push_multi_pcm_as_stereo(const float * pcm, int channels) {
     if (!pcm || channels <= 0) return;
@@ -338,18 +333,23 @@ public:
     }
 
     void * get_qt_widget() override {
-        if (!qt_widget)
+        if (!qt_widget) {
             qt_widget = new ProjectMQtWidget();
+            QObject::connect(qt_widget, &QObject::destroyed, [](QObject *) {
+                qt_widget = nullptr;
+            });
+        }
         return qt_widget;
     }
 
     void cleanup() override {
         hook_dissociate("set " PLUGIN_DOMAIN, on_config_changed);
 
-        if (qt_widget) {
-            delete qt_widget;
-            qt_widget = nullptr;
-        }
+        // Host UI owns the widget lifetime. Avoid deleting here because cleanup()
+        // can be called while a close event/destruction chain is already in flight.
+        if (qt_widget)
+            qt_widget->close();
+        qt_widget = nullptr;
 
         std::lock_guard<std::mutex> lock(pm_mutex);
         pm_destroy_locked();
